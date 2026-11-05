@@ -4,6 +4,10 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ContentUris
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import android.provider.OpenableColumns
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.*
@@ -22,7 +26,7 @@ import java.util.concurrent.Executors
 import kotlin.math.*
 
 class MainActivity : Activity() {
-    data class Song(val id: Long, val title: String, val artist: String, val album: String, val duration: Long)
+    data class Song(val id: Long, val title: String, val artist: String, val album: String, val duration: Long, val source: String = "")
     private val songs = mutableListOf<Song>()
     private var shown = listOf<Song>()
     private val ui = Handler(Looper.getMainLooper())
@@ -32,7 +36,7 @@ class MainActivity : Activity() {
     }
     private val loading = mutableSetOf<Long>()
     private val prefs by lazy { getSharedPreferences("appearance", MODE_PRIVATE) }
-    private var theme = 0
+    private var theme = 1
     private var light = false
     private var motion = true
     private var glassAmount = 55
@@ -44,6 +48,13 @@ class MainActivity : Activity() {
     private var shuffle = false
     private var repeat = false
     private var expanded = false
+    private var scanMessage = ""
+    private var scanRunning = false
+    private var active = false
+    private lateinit var playerHost: FrameLayout
+    private lateinit var emptyMessage: TextView
+    private var coverTint = Color.rgb(109,97,227)
+    private val pendingCovers = mutableSetOf<Long>()
     private var position = 0
     private val favourites = mutableSetOf<String>()
     private lateinit var root: FrameLayout
@@ -93,7 +104,8 @@ class MainActivity : Activity() {
     private fun row() = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
     private fun column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
     private fun space(n: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(n)) }
-    private fun button(symbol: String, description: String, size: Int = 25, action: () -> Unit) = label(symbol, size).apply {
+    private fun button(symbol: String, description: String, size: Int = 25, action: () -> Unit) = Control().apply {
+        text = symbol; textSize=size.toFloat(); setTextColor(inkColor)
         gravity = Gravity.CENTER; contentDescription = description
         layoutParams = LinearLayout.LayoutParams(dp(52), dp(52))
         setOnClickListener { pulse(this); action() }
@@ -112,7 +124,7 @@ class MainActivity : Activity() {
     }
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
-        theme = prefs.getInt("theme",0); light = prefs.getBoolean("light",false)
+        theme = prefs.getInt("theme",1); light = prefs.getBoolean("light",false)
         motion = prefs.getBoolean("motion",true); glassAmount = prefs.getInt("glass",55)
         favourites.addAll(prefs.getStringSet("favourites", emptySet()) ?: emptySet())
         buildUI()
@@ -131,10 +143,10 @@ class MainActivity : Activity() {
         val body = column().apply { setPadding(dp(22),dp(14),dp(22),dp(8)) }
         root.addView(body, FrameLayout.LayoutParams(-1,-1)); setContentView(root)
         val top = row()
-        top.addView(label("Music",36,true),LinearLayout.LayoutParams(0,dp(68),1f))
+        top.addView(label("Samsung Music",28,true),LinearLayout.LayoutParams(0,dp(68),1f))
         top.addView(button("◉","Customise appearance",27) { customise() }.apply { setTextColor(accent) })
         body.addView(top)
-        body.addView(label("Your sound. Your space.",14).apply { setTextColor(secondary) })
+        body.addView(label("Your library, in a new light.",14).apply { setTextColor(secondary) })
         body.addView(space(18))
         val search = EditText(this).apply {
             hint = "Search songs, artists, albums"; textSize = 15f; isSingleLine = true
@@ -152,6 +164,10 @@ class MainActivity : Activity() {
         val tabScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false }
         tabs = row(); tabScroll.addView(tabs); body.addView(tabScroll)
         drawTabs()
+        val access = row()
+        access.addView(label("＋ Add audio",12,true).apply { setTextColor(accent); setOnClickListener{pickAudio()} },LinearLayout.LayoutParams(0,dp(36),1f))
+        access.addView(label("↻ Rescan / Access",12,true).apply { setTextColor(secondary);setOnClickListener{accessOptions()} })
+        body.addView(access)
         val tools = row().apply { setPadding(0,dp(12),0,dp(8)) }
         count = label("Loading your library…",12).apply { setTextColor(secondary) }
         tools.addView(count,LinearLayout.LayoutParams(0,dp(36),1f))
@@ -185,7 +201,8 @@ class MainActivity : Activity() {
             }
         }
         library.adapter=adapter
-        val empty=label("No music here yet. Add songs to your phone.",15).apply { gravity=Gravity.CENTER; maxLines=3; setTextColor(secondary) }
+        val empty=label("Scanning your audio…",15).apply { gravity=Gravity.CENTER; maxLines=5; setTextColor(secondary); setOnClickListener{accessOptions()} }
+        emptyMessage=empty
         val listFrame=FrameLayout(this)
         listFrame.addView(library,FrameLayout.LayoutParams(-1,-1)); listFrame.addView(empty,FrameLayout.LayoutParams(-1,-1))
         library.emptyView=empty
@@ -215,7 +232,7 @@ class MainActivity : Activity() {
         listOf("Tracks","Albums","Artists","Favourites").forEach { name ->
             tabs.addView(label(name,16,true).apply {
                 setPadding(dp(14),0,dp(14),0); setTextColor(if(page==name)inkColor else secondary)
-                if(page==name) background=panel(20)
+                if(page==name) background=GradientDrawable(GradientDrawable.Orientation.TL_BR,intArrayOf(accent, palettes[theme][1])).apply{cornerRadius=dp(22).toFloat();setStroke(dp(1),0x66ffffff)}
                 setOnClickListener { page=name;drawTabs();filter(); if(motion){library.alpha=0f;library.animate().alpha(1f).setDuration(230).start()} }
             },LinearLayout.LayoutParams(-2,dp(40)))
         }
@@ -226,16 +243,29 @@ class MainActivity : Activity() {
         result=when(page){ "Albums"->result.distinctBy{it.album};"Artists"->result.distinctBy{it.artist};"Favourites"->result.filter{it.id.toString() in favourites};else->result }
         shown=result
         count.text="${result.size} ${when(page){"Albums"->"albums";"Artists"->"artists";else->"songs"}}"
+        emptyMessage.text=when {
+            scanRunning -> "Scanning audio on your phone…"
+            query.isNotEmpty() -> "No matches. Try another search."
+            page=="Favourites" -> "Tap a song’s menu to add favourites."
+            scanMessage.isNotEmpty() -> scanMessage
+            else -> "No indexed audio found.\nTap + Add audio to choose songs from Files."
+        }
         adapter.notifyDataSetChanged()
     }
     private fun buildPlayer() {
-        sheet=column().apply { setPadding(dp(28),dp(12),dp(28),dp(18)); background=panel(30,true); visibility=View.GONE; isClickable=true }
+        sheet=column().apply { setPadding(dp(28),dp(12),dp(28),dp(18)); background=ColorDrawableCompat(); isClickable=true }
         val close=row(); close.addView(button("⌄","Close player",30){hidePlayer()})
         close.addView(label("NOW PLAYING",11,true).apply { gravity=Gravity.CENTER;letterSpacing=.16f },LinearLayout.LayoutParams(0,dp(48),1f))
-        close.addView(button("⋯","Player options"){selected?.let{songOptions(it)}}); sheet.addView(close)
+        close.addView(button("⋯","Player options"){selected?.let{songOptions(it)}?:accessOptions()}); sheet.addView(close)
         sheet.addView(space(16))
         bigArt=art(280,22).apply { elevation=dp(16).toFloat() }
-        sheet.addView(bigArt,LinearLayout.LayoutParams(-1,0,1f).apply{bottomMargin=dp(30)})
+        val artArea=FrameLayout(this)
+        artArea.addView(bigArt,FrameLayout.LayoutParams(dp(280),dp(280),Gravity.CENTER))
+        artArea.addOnLayoutChangeListener{_,l,t,r,b,_,_,_,_->
+            val side=min(r-l,b-t)-dp(12)
+            if(side>0 && bigArt.layoutParams.width!=side)bigArt.layoutParams=FrameLayout.LayoutParams(side,side,Gravity.CENTER)
+        }
+        sheet.addView(artArea,LinearLayout.LayoutParams(-1,0,1f).apply{bottomMargin=dp(16)})
         val titleRow=row(); val info=column()
         bigTitle=label("Your next favourite",25,true);bigArtist=label("Choose a song from your library",17).apply{setTextColor(secondary)}
         info.addView(bigTitle);info.addView(bigArtist)
@@ -259,18 +289,22 @@ class MainActivity : Activity() {
         controls.addView(button("▸│","Next song",29){next(1)})
         looping=button("↻","Toggle repeat",28){repeat=!repeat;updatePlayer()};controls.addView(looping);sheet.addView(controls)
         sheet.addView(label("ON THIS PHONE",10,true).apply{setTextColor(secondary);gravity=Gravity.CENTER;letterSpacing=.12f},LinearLayout.LayoutParams(-1,dp(30)))
-        root.addView(sheet,FrameLayout.LayoutParams(-1,-1).apply{topMargin=dp(8)})
+        playerHost=FrameLayout(this).apply{visibility=View.GONE;isClickable=true}
+        playerHost.addView(Atmosphere(true),FrameLayout.LayoutParams(-1,-1))
+        playerHost.addView(sheet,FrameLayout.LayoutParams(-1,-1))
+        root.addView(playerHost,FrameLayout.LayoutParams(-1,-1))
         var down=0f
-        close.setOnTouchListener { _,event -> when(event.actionMasked){MotionEvent.ACTION_DOWN->{down=event.rawY;true};MotionEvent.ACTION_MOVE->{sheet.translationY=max(0f,event.rawY-down);true};MotionEvent.ACTION_UP,MotionEvent.ACTION_CANCEL->{if(sheet.translationY>dp(80))hidePlayer()else sheet.animate().translationY(0f).setDuration(220).start();true};else->false} }
+        close.setOnTouchListener { _,event -> when(event.actionMasked){MotionEvent.ACTION_DOWN->{down=event.rawY;true};MotionEvent.ACTION_MOVE->{playerHost.translationY=max(0f,event.rawY-down);true};MotionEvent.ACTION_UP,MotionEvent.ACTION_CANCEL->{if(playerHost.translationY>dp(80))hidePlayer()else playerHost.animate().translationY(0f).setDuration(220).start();true};else->false} }
     }
     private fun showPlayer() {
         if(expanded)return
-        expanded=true;sheet.visibility=View.VISIBLE;sheet.translationY=if(motion)root.height.toFloat() else 0f
-        sheet.animate().translationY(0f).setDuration(if(motion)480 else 0).setInterpolator(DecelerateInterpolator(1.8f)).start()
+        if(selected==null){if(songs.isNotEmpty())play(songs.first())else{accessOptions();return}}
+        expanded=true;playerHost.visibility=View.VISIBLE;playerHost.translationY=if(motion)root.height.toFloat() else 0f
+        playerHost.animate().translationY(0f).setDuration(if(motion)480 else 0).setInterpolator(DecelerateInterpolator(1.8f)).start()
     }
     private fun hidePlayer() {
         expanded=false
-        sheet.animate().translationY(root.height.toFloat()).setDuration(if(motion)350 else 0).withEndAction{sheet.visibility=View.GONE}.start()
+        playerHost.animate().translationY(root.height.toFloat()).setDuration(if(motion)350 else 0).withEndAction{playerHost.visibility=View.GONE}.start()
     }
     @Deprecated("Legacy back callback")
     override fun onBackPressed(){if(expanded)hidePlayer()else super.onBackPressed()}
@@ -303,19 +337,60 @@ class MainActivity : Activity() {
     private var dialog:AlertDialog?=null
     private fun saveAppearance(){prefs.edit().putInt("theme",theme).putBoolean("light",light).putBoolean("motion",motion).putInt("glass",glassAmount).apply()}
     private fun rebuild(){expanded=false;buildUI()}
+    private fun audioPermission()=if(Build.VERSION.SDK_INT>=33)Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
+    private fun songUri(song:Song)=if(song.source.isNotEmpty())Uri.parse(song.source)else ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,song.id)
+    private fun accessOptions(){
+        AlertDialog.Builder(this).setTitle("Find your music").setMessage("Scan audio indexed by Android, or choose files directly. Audio in private app folders or cloud storage may need to be selected from Files.")
+            .setPositiveButton("Choose audio"){_,_->pickAudio()}
+            .setNeutralButton("Rescan"){_,_->if(checkSelfPermission(audioPermission())==PackageManager.PERMISSION_GRANTED)loadSongs()else requestPermissions(arrayOf(audioPermission()),42)}
+            .setNegativeButton("App settings"){_,_->startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:$packageName")))}.show()
+    }
+    private fun pickAudio(){
+        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply{type="audio/*";addCategory(Intent.CATEGORY_OPENABLE);putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)},73)
+    }
+    @Deprecated("Legacy activity result")
+    override fun onActivityResult(code:Int,result:Int,data:Intent?){
+        super.onActivityResult(code,result,data)
+        if(code!=73||result!=RESULT_OK||data==null)return
+        val saved=(prefs.getStringSet("imports",emptySet())?:emptySet()).toMutableSet()
+        val uris=mutableListOf<Uri>();data.clipData?.let{clips->for(i in 0 until clips.itemCount)uris.add(clips.getItemAt(i).uri)}?:data.data?.let{uris.add(it)}
+        uris.forEach{uri->try{contentResolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION)}catch(_:Exception){};saved.add(uri.toString())}
+        prefs.edit().putStringSet("imports",saved).apply();page="Tracks";query="";drawTabs();loadSongs()
+    }
     private fun loadSongs(){
+        if(scanRunning)return
+        scanRunning=true;scanMessage="";filter()
         worker.execute{
-            val found=mutableListOf<Song>()
-            try{contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,arrayOf("_id","title","artist","album","duration"),"is_music != 0",null,"title COLLATE NOCASE ASC")?.use{c->while(c.moveToNext())found.add(Song(c.getLong(0),c.getString(1)?:"Untitled",c.getString(2)?:"Unknown artist",c.getString(3)?:"Unknown album",c.getLong(4)))}}catch(_:Exception){}
-            ui.post{if(!isDestroyed){songs.clear();songs.addAll(found);filter()}}
+            val found=mutableListOf<Song>();var error=""
+            val permitted=checkSelfPermission(audioPermission())==PackageManager.PERMISSION_GRANTED
+            if(permitted)try{
+                val collections=if(Build.VERSION.SDK_INT>=29)MediaStore.getExternalVolumeNames(this).map{MediaStore.Audio.Media.getContentUri(it)}else listOf(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI)
+                collections.forEach{collection->
+                    contentResolver.query(collection,arrayOf("_id","title","artist","album","duration"),null,null,"title COLLATE NOCASE ASC")?.use{c->while(c.moveToNext()){
+                        val uri=ContentUris.withAppendedId(collection,c.getLong(0)).toString()
+                        found.add(Song(uri.hashCode().toLong(),c.getString(1)?:"Untitled",c.getString(2)?:"Unknown artist",c.getString(3)?:"Unknown album",c.getLong(4),uri))
+                    }}
+                }
+            }catch(e:SecurityException){error="Music access is off. Tap Rescan / Access to enable it."}catch(_:Exception){error="Android could not scan audio. Try Rescan or + Add audio."}
+            else error="Allow Music and audio access, or use + Add audio to select files."
+            (prefs.getStringSet("imports",emptySet())?:emptySet()).forEach{source->
+                if(found.none{it.source==source})try{
+                    val uri=Uri.parse(source);var title="Audio file"
+                    contentResolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME),null,null,null)?.use{c->if(c.moveToFirst())title=c.getString(0)?:title}
+                    found.add(Song(source.hashCode().toLong(),title,"Selected from Files","Imported audio",0,source))
+                }catch(_:Exception){}
+            }
+            ui.post{if(!isDestroyed){scanRunning=false;scanMessage=error;songs.clear();songs.addAll(found.distinctBy{it.source}.sortedBy{it.title.lowercase()});filter()}}
         }
     }
-    override fun onRequestPermissionsResult(code:Int,permissions:Array<out String>,results:IntArray){super.onRequestPermissionsResult(code,permissions,results);if(code==42&&results.firstOrNull()==PackageManager.PERMISSION_GRANTED)loadSongs()else count.text="Music access is needed. Enable it in app settings."}
+    override fun onRequestPermissionsResult(code:Int,permissions:Array<out String>,results:IntArray){super.onRequestPermissionsResult(code,permissions,results);if(code==42)loadSongs()}
+    override fun onResume(){super.onResume();active=true;if(::adapter.isInitialized)loadSongs();if(::backdrop.isInitialized)backdrop.invalidate();if(::playerHost.isInitialized)playerHost.invalidate()}
+    override fun onPause(){active=false;super.onPause()}
     private fun play(song:Song){
         player?.release();prepared=false;selected=song;position=0
         val fresh=MediaPlayer();player=fresh
         try{
-            fresh.setDataSource(this,ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,song.id))
+            fresh.setDataSource(this,songUri(song))
             fresh.setOnPreparedListener{if(player===it){prepared=true;it.start();updatePlayer()}}
             fresh.setOnCompletionListener{if(repeat){it.seekTo(0);it.start()}else next(1)}
             fresh.setOnErrorListener{_,_,_->prepared=false;Toast.makeText(this,"This audio file could not be played",Toast.LENGTH_SHORT).show();updatePlayer();true}
@@ -351,27 +426,75 @@ class MainActivity : Activity() {
         worker.execute{
             var bitmap:Bitmap?=null
             val retriever=MediaMetadataRetriever()
-            try{retriever.setDataSource(this,ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,song.id));retriever.embeddedPicture?.let{bytes->
+            try{retriever.setDataSource(this,songUri(song));retriever.embeddedPicture?.let{bytes->
                 val options=BitmapFactory.Options().apply{inJustDecodeBounds=true};BitmapFactory.decodeByteArray(bytes,0,bytes.size,options)
                 options.inSampleSize=max(1,max(options.outWidth,options.outHeight)/700);options.inJustDecodeBounds=false
                 bitmap=BitmapFactory.decodeByteArray(bytes,0,bytes.size,options)
             }}catch(_:Exception){}finally{try{retriever.release()}catch(_:Exception){}}
-            ui.post{loading.remove(song.id);bitmap?.let{b->covers.put(song.id,b);if(!isDestroyed){if(view.tag==song.id)view.setImageBitmap(b);if(selected?.id==song.id){miniArt.setImageBitmap(b);bigArt.setImageBitmap(b)};adapter.notifyDataSetChanged()}}}
+            ui.post{loading.remove(song.id);bitmap?.let{b->covers.put(song.id,b);if(!isDestroyed){if(view.tag==song.id)view.setImageBitmap(b);if(selected?.id==song.id){miniArt.setImageBitmap(b);bigArt.setImageBitmap(b);sampleTint(b)};adapter.notifyDataSetChanged()}}}
         }
     }
-    private inner class Atmosphere:View(this@MainActivity){
+    private inner class Atmosphere(private val immersive:Boolean=false):View(this@MainActivity){
         private val paint=Paint(Paint.ANTI_ALIAS_FLAG)
         private var start=SystemClock.uptimeMillis()
+        private val path=Path()
+        private val ribbonColours=IntArray(3)
+        private var lastFrame=0L
+        private var gradient:Shader?=null
+        private var lastW=0
+        private var lastTheme=-1
         override fun onDraw(c:Canvas){
-            val w=width.toFloat();val h=height.toFloat();val t=if(motion)(SystemClock.uptimeMillis()-start)/10000f else 0f
-            c.drawColor(if(light)Color.rgb(247,244,250)else Color.rgb(13,12,18))
-            val col=palettes[theme]
-            for(i in 0..1){val x=w*(if(i==0).15f else .9f)+sin(t+i)*w*.15f;val y=h*(if(i==0).12f else .55f)+cos(t+i)*h*.08f
-                val tint=Color.argb(if(light)28 else 40,Color.red(col[i]),Color.green(col[i]),Color.blue(col[i]))
-                paint.shader=RadialGradient(x,y,w*.95f,tint,Color.TRANSPARENT,Shader.TileMode.CLAMP);c.drawRect(0f,0f,w,h,paint)
+            val w=width.toFloat();val h=height.toFloat();val t=if(motion)(SystemClock.uptimeMillis()-start)/8000f else 0f
+            c.drawColor(if(light)Color.rgb(241,242,252)else Color.rgb(9,11,24))
+            if(lastW!=width||lastTheme!=theme){
+                lastW=width;lastTheme=theme
+                gradient=RadialGradient(w*.5f,h*.3f,w,Color.argb(if(light)45 else 95,100,95,210),Color.TRANSPARENT,Shader.TileMode.CLAMP)
             }
-            paint.shader=null;if(motion&&isShown)postInvalidateOnAnimation()
+            paint.shader=gradient;c.drawRect(0f,0f,w,h,paint)
+            ribbonColours[0]=Color.argb(if(immersive)150 else 60,83,141,255)
+            ribbonColours[1]=Color.argb(if(immersive)135 else 50,Color.red(coverTint),Color.green(coverTint),Color.blue(coverTint))
+            ribbonColours[2]=Color.argb(if(immersive)120 else 40,191,70,244)
+            paint.shader=LinearGradient(0f,h*.2f,w,h*.8f,ribbonColours,null,Shader.TileMode.CLAMP)
+            val centre=if(immersive)h*.38f else h*.68f
+            for(i in 0..4){
+                val off=i*0.4f;val sway=sin(t+off)*h*.09f
+                path.reset();path.moveTo(-w*.2f,centre+sway+dp(i*7))
+                path.cubicTo(w*.15f,centre-h*.3f+cos(t+off)*h*.09f,w*.55f,centre+h*.32f,w*1.2f,centre-h*.12f+sway)
+                path.cubicTo(w*.6f,centre+h*.5f+sin(t*.8f)*h*.08f,w*.2f,centre-h*.14f,w*-.2f,centre+sway+dp(i*7))
+                path.close();paint.style=Paint.Style.FILL;paint.alpha=if(i==0)120 else 35;c.drawPath(path,paint)
+                paint.style=Paint.Style.STROKE;paint.strokeWidth=dp(1).toFloat();paint.alpha=if(immersive)140 else 60;c.drawPath(path,paint)
+            }
+            paint.alpha=255;paint.shader=null;paint.style=Paint.Style.FILL
+            if(motion&&active&&isShown&&windowVisibility==View.VISIBLE){lastFrame=SystemClock.uptimeMillis();postInvalidateOnAnimation()}
         }
     }
+    private fun ColorDrawableCompat()=android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
+    private fun sampleTint(bitmap:Bitmap){
+        try{val small=Bitmap.createScaledBitmap(bitmap,1,1,true);val col=small.getPixel(0,0);coverTint=Color.rgb(max(70,Color.red(col)),max(70,Color.green(col)),max(100,Color.blue(col)));small.recycle()}catch(_:Exception){}
+    }
+    private inner class Control:TextView(this@MainActivity){
+        private val brush=Paint(Paint.ANTI_ALIAS_FLAG)
+        private val shape=Path()
+        override fun onDraw(c:Canvas){
+            val mark=text.toString();val transport=mark=="▶"||mark=="Ⅱ"||mark.contains("│")
+            if(!transport){super.onDraw(c);return}
+            val cx=width*.5f;val cy=height*.5f
+            val main=height>=dp(80);val radius=if(main)dp(35).toFloat()else dp(21).toFloat()
+            brush.shader=RadialGradient(cx-radius*.35f,cy-radius*.5f,radius*1.8f,intArrayOf(Color.rgb(157,166,255),Color.rgb(72,72,152),Color.rgb(42,39,88)),null,Shader.TileMode.CLAMP)
+            brush.style=Paint.Style.FILL;c.drawCircle(cx,cy,radius,brush)
+            brush.shader=null;brush.style=Paint.Style.STROKE;brush.strokeWidth=dp(1).toFloat();brush.color=Color.argb(130,205,208,255);c.drawCircle(cx,cy,radius,brush)
+            brush.style=Paint.Style.FILL;brush.color=Color.WHITE
+            val unit=if(main)dp(12).toFloat()else dp(7).toFloat()
+            if(mark=="Ⅱ"){
+                c.drawRoundRect(cx-unit*.7f,cy-unit,cx-unit*.2f,cy+unit,dp(1).toFloat(),dp(1).toFloat(),brush)
+                c.drawRoundRect(cx+unit*.2f,cy-unit,cx+unit*.7f,cy+unit,dp(1).toFloat(),dp(1).toFloat(),brush)
+            }else{
+                val direction=if(mark.startsWith("│"))-1 else 1
+                shape.reset();shape.moveTo(cx-unit*.6f*direction,cy-unit);shape.lineTo(cx+unit*.9f*direction,cy);shape.lineTo(cx-unit*.6f*direction,cy+unit);shape.close();c.drawPath(shape,brush)
+                if(mark.contains("│")){val x=cx+unit*direction;c.drawRoundRect(x-dp(1),cy-unit,x+dp(1),cy+unit,dp(1).toFloat(),dp(1).toFloat(),brush)}
+            }
+        }
+    }
+
     override fun onDestroy(){ui.removeCallbacksAndMessages(null);player?.release();worker.shutdownNow();super.onDestroy()}
 }
