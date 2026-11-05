@@ -14,6 +14,14 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.view.Gravity
+import android.view.View
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.RadialGradient
+import android.graphics.Shader
+import android.animation.ValueAnimator
+import android.view.animation.DecelerateInterpolator
+import android.content.res.ColorStateList
 import android.widget.*
 
 class MainActivity : Activity() {
@@ -27,8 +35,8 @@ class MainActivity : Activity() {
     private lateinit var seek: SeekBar
     private val handler = Handler(Looper.getMainLooper())
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-    private fun text(s: String, size: Float, bold: Boolean = false) = TextView(this).apply {
-        text = s; textSize = size; setTextColor(Color.WHITE)
+    private fun text(s: String, size: Int, bold: Boolean = false) = TextView(this).apply {
+        text = s; textSize = size.toFloat(); setTextColor(Color.WHITE)
         if (bold) typeface = Typeface.DEFAULT_BOLD
     }
     private fun glass() = GradientDrawable(GradientDrawable.Orientation.TL_BR,
@@ -44,11 +52,13 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(28), dp(20), dp(20))
             background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                intArrayOf(Color.rgb(54, 30, 90), Color.rgb(18, 18, 37), Color.rgb(27, 20, 48)))
+                intArrayOf(Color.rgb(30, 26, 48), Color.rgb(10, 12, 20), Color.rgb(20, 17, 33)))
         }
         setContentView(root)
-        root.addView(text("SAMSUNG  ◇  GLASS MUSIC", 13, true))
-        root.addView(text("Your music,\nreimagined.", 32, true).apply { setPadding(0, dp(20), 0, dp(18)) })
+        root.addView(text("G L A S S   /   M U S I C", 13, true))
+        root.addView(text("Feel every beat.", 32, true).apply { setPadding(0, dp(20), 0, dp(18)) })
+        val art = AuroraView()
+        root.addView(art, LinearLayout.LayoutParams(-1, dp(160)).apply { bottomMargin = dp(20) })
         root.addView(text("ON YOUR DEVICE", 12, true).apply { alpha = .65f })
         val scroll = ScrollView(this)
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(14), 0, 0) }
@@ -76,6 +86,17 @@ class MainActivity : Activity() {
         }
         card.addView(seek)
         root.addView(card)
+        list.layoutTransition = android.animation.LayoutTransition()
+        root.alpha = 0f
+        root.translationY = dp(14).toFloat()
+        root.animate().alpha(1f).translationY(0f).setDuration(650).setInterpolator(DecelerateInterpolator()).start()
+        listOf(previous, toggle, next).forEach { button ->
+            button.setTextColor(Color.WHITE)
+            button.backgroundTintList = ColorStateList.valueOf(Color.rgb(62, 48, 91))
+            button.contentDescription = when (button) { previous -> "Previous song"; next -> "Next song"; else -> "Play or pause" }
+        }
+        seek.progressTintList = ColorStateList.valueOf(Color.rgb(195, 171, 255))
+        seek.thumbTintList = ColorStateList.valueOf(Color.rgb(220, 204, 255))
         handler.post(object : Runnable {
             override fun run() {
                 player?.let { try { seek.max = it.duration; seek.progress = it.currentPosition } catch (_: Exception) {} }
@@ -103,7 +124,12 @@ class MainActivity : Activity() {
             val item = text("♫    ${song.title}\n       ${song.artist}", 16).apply {
                 setPadding(dp(14), dp(16), dp(14), dp(16))
                 background = glass()
-                setOnClickListener { play(index) }
+                setOnClickListener {
+                    animate().scaleX(.97f).scaleY(.97f).setDuration(90).withEndAction {
+                        animate().scaleX(1f).scaleY(1f).setDuration(220).start()
+                    }.start()
+                    play(index)
+                }
             }
             list.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(9) })
         }
@@ -119,7 +145,9 @@ class MainActivity : Activity() {
             if (player == null) { now.text = "Cannot play this file"; return }
             player?.setOnCompletionListener { change(1) }
             player?.start()
-            now.text = songs[index].title
+            now.text = songs[index].title + "\n" + songs[index].artist
+            now.alpha = .3f
+            now.animate().alpha(1f).setDuration(350).start()
             toggle.text = "Ⅱ"
         } catch (e: Exception) { now.text = "Playback error: ${e.message}" }
     }
@@ -128,6 +156,39 @@ class MainActivity : Activity() {
         val p = player ?: return
         if (p.isPlaying) { p.pause(); toggle.text = "▶" }
         else { p.start(); toggle.text = "Ⅱ" }
+    }
+    private inner class AuroraView : View(this@MainActivity) {
+        private val ink = Paint(Paint.ANTI_ALIAS_FLAG)
+        private var phase = 0f
+        private val motion = ValueAnimator.ofFloat(0f, 6.283185f).apply {
+            duration = 14000
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = android.view.animation.LinearInterpolator()
+            addUpdateListener { phase = it.animatedValue as Float; invalidate() }
+        }
+        override fun onAttachedToWindow() { super.onAttachedToWindow(); motion.start() }
+        override fun onDetachedFromWindow() { motion.cancel(); super.onDetachedFromWindow() }
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val w = width.toFloat(); val h = height.toFloat()
+            ink.shader = RadialGradient(w * .5f, h * .6f, w * .6f,
+                intArrayOf(Color.rgb(88, 54, 132), Color.rgb(18, 19, 31)), null, Shader.TileMode.CLAMP)
+            canvas.drawRoundRect(0f, 0f, w, h, dp(24).toFloat(), dp(24).toFloat(), ink)
+            ink.shader = null
+            val cx = w * .5f; val cy = h * .5f
+            for (i in 0..5) {
+                ink.style = Paint.Style.STROKE
+                ink.strokeWidth = dp(1).toFloat()
+                ink.color = Color.argb(100 - i * 12, 208, 186, 255)
+                val radius = dp(27 + i * 10).toFloat()
+                canvas.drawCircle(cx + kotlin.math.sin(phase + i * .3f) * dp(10), cy, radius, ink)
+            }
+            ink.style = Paint.Style.FILL
+            ink.color = Color.WHITE
+            ink.textSize = dp(34).toFloat()
+            ink.textAlign = Paint.Align.CENTER
+            canvas.drawText("♫", cx, cy + dp(12), ink)
+        }
     }
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
