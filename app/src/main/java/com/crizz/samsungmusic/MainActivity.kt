@@ -54,7 +54,9 @@ class MainActivity : Activity() {
     private lateinit var playerHost: FrameLayout
     private lateinit var emptyMessage: TextView
     private var coverTint = Color.rgb(109,97,227)
-    private val pendingCovers = mutableSetOf<Long>()
+    private val noArtwork = mutableSetOf<Long>()
+    private var fallbackArt: Bitmap? = null
+    private var fallbackTheme = -1
     private var position = 0
     private val favourites = mutableSetOf<String>()
     private lateinit var root: FrameLayout
@@ -304,7 +306,7 @@ class MainActivity : Activity() {
     }
     private fun hidePlayer() {
         expanded=false
-        playerHost.animate().translationY(root.height.toFloat()).setDuration(if(motion)350 else 0).withEndAction{playerHost.visibility=View.GONE}.start()
+        playerHost.animate().translationY(root.height.toFloat()).setDuration(if(motion)350 else 0).withEndAction{playerHost.visibility=View.GONE;backdrop.invalidate()}.start()
     }
     @Deprecated("Legacy back callback")
     override fun onBackPressed(){if(expanded)hidePlayer()else super.onBackPressed()}
@@ -322,7 +324,7 @@ class MainActivity : Activity() {
         },LinearLayout.LayoutParams(0,dp(52),1f))};box.addView(colours)
         val day=Switch(this).apply{text="Light appearance";setTextColor(inkColor);isChecked=light;setOnCheckedChangeListener{_,v->light=v;saveAppearance();dialog?.dismiss();rebuild();customise()}}
         box.addView(day)
-        box.addView(Switch(this).apply{text="Fluid animations";setTextColor(inkColor);isChecked=motion;setOnCheckedChangeListener{_,v->motion=v;saveAppearance();backdrop.invalidate()}})
+        box.addView(Switch(this).apply{text="Fluid animations";setTextColor(inkColor);isChecked=motion;setOnCheckedChangeListener{_,v->motion=v;saveAppearance();backdrop.invalidate();playerHost.getChildAt(0).invalidate()}})
         box.addView(space(12));box.addView(label("Glass tint",14))
         box.addView(SeekBar(this).apply{max=100;progress=glassAmount;progressTintList=ColorStateList.valueOf(accent)
             setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener{
@@ -384,7 +386,7 @@ class MainActivity : Activity() {
         }
     }
     override fun onRequestPermissionsResult(code:Int,permissions:Array<out String>,results:IntArray){super.onRequestPermissionsResult(code,permissions,results);if(code==42)loadSongs()}
-    override fun onResume(){super.onResume();active=true;if(::adapter.isInitialized)loadSongs();if(::backdrop.isInitialized)backdrop.invalidate();if(::playerHost.isInitialized)playerHost.invalidate()}
+    override fun onResume(){super.onResume();active=true;if(::adapter.isInitialized)loadSongs();if(::backdrop.isInitialized)backdrop.invalidate();if(::playerHost.isInitialized)playerHost.getChildAt(0).invalidate()}
     override fun onPause(){active=false;super.onPause()}
     private fun play(song:Song){
         player?.release();prepared=false;selected=song;position=0
@@ -408,6 +410,7 @@ class MainActivity : Activity() {
         love.text=if(song?.id.toString() in favourites)"♥"else"♡";love.setTextColor(accent)
         random.setTextColor(if(shuffle)accent else secondary);looping.setTextColor(if(repeat)accent else secondary)
         bindArt(miniArt,song);bindArt(bigArt,song)
+        selected?.let{song->covers.get(song.id)?.let{sampleTint(it)}}
         backdrop.invalidate()
     }
     private fun time(ms:Int):String{val s=max(0,ms)/1000;return "${s/60}:${(s%60).toString().padStart(2,'0')}"}
@@ -416,13 +419,14 @@ class MainActivity : Activity() {
         ui.postDelayed(this,250)
     }}
     private fun placeholder():Bitmap{
+        if(fallbackTheme==theme)fallbackArt?.let{return it}
         val b=Bitmap.createBitmap(128,128,Bitmap.Config.ARGB_8888);val c=Canvas(b);val p=Paint(Paint.ANTI_ALIAS_FLAG)
         p.shader=LinearGradient(0f,0f,128f,128f,palettes[theme],null,Shader.TileMode.CLAMP);c.drawRect(0f,0f,128f,128f,p)
-        p.shader=null;p.color=Color.argb(60,255,255,255);c.drawCircle(96f,18f,65f,p);p.color=Color.WHITE;p.textSize=66f;p.textAlign=Paint.Align.CENTER;c.drawText("♫",64f,88f,p);return b
+        p.shader=null;p.color=Color.argb(60,255,255,255);c.drawCircle(96f,18f,65f,p);p.color=Color.WHITE;p.textSize=66f;p.textAlign=Paint.Align.CENTER;c.drawText("♫",64f,88f,p);fallbackTheme=theme;fallbackArt=b;return b
     }
     private fun bindArt(view:ImageView,song:Song?){
         view.tag=song?.id;view.setImageBitmap(song?.let{covers.get(it.id)}?:placeholder())
-        if(song==null||covers.get(song.id)!=null||!loading.add(song.id))return
+        if(song==null||covers.get(song.id)!=null||song.id in noArtwork||!loading.add(song.id))return
         worker.execute{
             var bitmap:Bitmap?=null
             val retriever=MediaMetadataRetriever()
@@ -431,7 +435,7 @@ class MainActivity : Activity() {
                 options.inSampleSize=max(1,max(options.outWidth,options.outHeight)/700);options.inJustDecodeBounds=false
                 bitmap=BitmapFactory.decodeByteArray(bytes,0,bytes.size,options)
             }}catch(_:Exception){}finally{try{retriever.release()}catch(_:Exception){}}
-            ui.post{loading.remove(song.id);bitmap?.let{b->covers.put(song.id,b);if(!isDestroyed){if(view.tag==song.id)view.setImageBitmap(b);if(selected?.id==song.id){miniArt.setImageBitmap(b);bigArt.setImageBitmap(b);sampleTint(b)};adapter.notifyDataSetChanged()}}}
+            ui.post{loading.remove(song.id);if(bitmap==null)noArtwork.add(song.id);bitmap?.let{b->covers.put(song.id,b);if(!isDestroyed){if(view.tag==song.id)view.setImageBitmap(b);if(selected?.id==song.id){miniArt.setImageBitmap(b);bigArt.setImageBitmap(b);sampleTint(b)};adapter.notifyDataSetChanged()}}}
         }
     }
     private inner class Atmosphere(private val immersive:Boolean=false):View(this@MainActivity){
@@ -465,7 +469,7 @@ class MainActivity : Activity() {
                 paint.style=Paint.Style.STROKE;paint.strokeWidth=dp(1).toFloat();paint.alpha=if(immersive)140 else 60;c.drawPath(path,paint)
             }
             paint.alpha=255;paint.shader=null;paint.style=Paint.Style.FILL
-            if(motion&&active&&isShown&&windowVisibility==View.VISIBLE){lastFrame=SystemClock.uptimeMillis();postInvalidateOnAnimation()}
+            if(motion&&active&&isShown&&windowVisibility==View.VISIBLE&&(immersive||!expanded)){lastFrame=SystemClock.uptimeMillis();postInvalidateOnAnimation()}
         }
     }
     private fun ColorDrawableCompat()=android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
