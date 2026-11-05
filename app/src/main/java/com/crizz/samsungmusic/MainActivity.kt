@@ -76,11 +76,11 @@ class MainActivity : Activity() {
         intArrayOf(Color.rgb(239, 159, 77), Color.rgb(198, 82, 130))
     )
     private val accent get() = palettes[theme][0]
-    private val foreground get() = if (light) Color.rgb(29, 27, 34) else Color.rgb(249, 247, 251)
+    private val inkColor get() = if (light) Color.rgb(29, 27, 34) else Color.rgb(249, 247, 251)
     private val secondary get() = if (light) Color.rgb(111, 104, 118) else Color.rgb(165, 159, 176)
     private fun dp(n: Int) = (resources.displayMetrics.density * n).toInt()
     private fun label(value: String, size: Int = 16, bold: Boolean = false) = TextView(this).apply {
-        text = value; textSize = size.toFloat(); setTextColor(foreground)
+        text = value; textSize = size.toFloat(); setTextColor(inkColor)
         typeface = Typeface.create("sans-serif" + if (bold) "-medium" else "", Typeface.NORMAL)
         maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
         gravity = Gravity.CENTER_VERTICAL
@@ -138,7 +138,7 @@ class MainActivity : Activity() {
         body.addView(space(18))
         val search = EditText(this).apply {
             hint = "Search songs, artists, albums"; textSize = 15f; isSingleLine = true
-            setTextColor(foreground); setHintTextColor(secondary)
+            setTextColor(inkColor); setHintTextColor(secondary)
             background = panel(16); setPadding(dp(16),0,dp(16),0)
             setText(query); contentDescription = "Search your music library"
             addTextChangedListener(object: TextWatcher {
@@ -214,7 +214,7 @@ class MainActivity : Activity() {
         tabs.removeAllViews()
         listOf("Tracks","Albums","Artists","Favourites").forEach { name ->
             tabs.addView(label(name,16,true).apply {
-                setPadding(dp(14),0,dp(14),0); setTextColor(if(page==name)foreground else secondary)
+                setPadding(dp(14),0,dp(14),0); setTextColor(if(page==name)inkColor else secondary)
                 if(page==name) background=panel(20)
                 setOnClickListener { page=name;drawTabs();filter(); if(motion){library.alpha=0f;library.animate().alpha(1f).setDuration(230).start()} }
             },LinearLayout.LayoutParams(-2,dp(40)))
@@ -242,7 +242,7 @@ class MainActivity : Activity() {
         titleRow.addView(info,LinearLayout.LayoutParams(0,-2,1f));love=button("♡","Toggle favourite",30){selected?.let{favourite(it)}}
         titleRow.addView(love);sheet.addView(titleRow);sheet.addView(space(18))
         seek=SeekBar(this).apply {
-            progressTintList=ColorStateList.valueOf(accent);thumbTintList=ColorStateList.valueOf(foreground)
+            progressTintList=ColorStateList.valueOf(accent);thumbTintList=ColorStateList.valueOf(inkColor)
             setPadding(0,0,0,0)
             setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener {
                 override fun onStartTrackingTouch(b:SeekBar?) {scrubbing=true}
@@ -286,9 +286,9 @@ class MainActivity : Activity() {
         listOf("Rose","Iris","Ocean","Sunset").forEachIndexed{i,name->colours.addView(label(name,13,true).apply{
             gravity=Gravity.CENTER;setTextColor(palettes[i][0]);setOnClickListener{theme=i;saveAppearance();rebuild();dialog?.dismiss();customise()}
         },LinearLayout.LayoutParams(0,dp(52),1f))};box.addView(colours)
-        val day=Switch(this).apply{text="Light appearance";setTextColor(foreground);isChecked=light;setOnCheckedChangeListener{_,v->light=v;saveAppearance();dialog?.dismiss();rebuild();customise()}}
+        val day=Switch(this).apply{text="Light appearance";setTextColor(inkColor);isChecked=light;setOnCheckedChangeListener{_,v->light=v;saveAppearance();dialog?.dismiss();rebuild();customise()}}
         box.addView(day)
-        box.addView(Switch(this).apply{text="Fluid animations";setTextColor(foreground);isChecked=motion;setOnCheckedChangeListener{_,v->motion=v;saveAppearance();backdrop.invalidate()}})
+        box.addView(Switch(this).apply{text="Fluid animations";setTextColor(inkColor);isChecked=motion;setOnCheckedChangeListener{_,v->motion=v;saveAppearance();backdrop.invalidate()}})
         box.addView(space(12));box.addView(label("Glass tint",14))
         box.addView(SeekBar(this).apply{max=100;progress=glassAmount;progressTintList=ColorStateList.valueOf(accent)
             setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener{
