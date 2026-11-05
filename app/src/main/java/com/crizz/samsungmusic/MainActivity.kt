@@ -76,6 +76,9 @@ class MainActivity : Activity() {
     private lateinit var miniShuffle: TextView
     private lateinit var miniRepeat: TextView
     private var waveEnabled = true
+    private var visualPlaying=false
+    private var visualElapsed=0L
+    private var visualStart=0L
     private val noArtwork = mutableSetOf<Long>()
     private var fallbackArt: Bitmap? = null
     private var fallbackTheme = -1
@@ -461,6 +464,7 @@ class MainActivity : Activity() {
     private fun next(delta:Int){if(delta>0&&upNext.isNotEmpty()){play(upNext.removeFirst());return};if(songs.isEmpty())return;val index=songs.indexOfFirst{it.id==selected?.id};play(if(shuffle)songs.random()else songs[(index+delta+songs.size)%songs.size])}
     private fun updatePlayer(){
         val song=selected;val playing=prepared&&player?.isPlaying==true
+        if(visualPlaying!=playing){if(visualPlaying)visualElapsed+=SystemClock.uptimeMillis()-visualStart;visualPlaying=playing;visualStart=SystemClock.uptimeMillis()}
         miniTitle.text=song?.title?:"Choose your first song";miniArtist.text=song?.artist?:"On your device"
         bigTitle.text=song?.title?:"Your next favourite";bigArtist.text=song?.artist?:"Choose a song from your library"
         miniPlay.text=if(playing)"Ⅱ"else"▶";bigPlay.text=miniPlay.text
@@ -515,7 +519,7 @@ class MainActivity : Activity() {
         private var shaderWidth=0
         private var shaderHeight=0
         override fun onDraw(c:Canvas){
-            val w=width.toFloat();val h=height.toFloat();val t=if(motion)(SystemClock.uptimeMillis()-start)/8000f else 0f
+            val w=width.toFloat();val h=height.toFloat();val t=if(motion)motionTime()/8000f else 0f
             c.drawColor(if(light)Color.rgb(241,242,252)else Color.rgb(9,11,24))
             if(lastW!=width||lastTheme!=theme||lastH!=height||lastTint!=coverTint){
                 lastW=width;lastTheme=theme;lastH=height;lastTint=coverTint
@@ -608,7 +612,7 @@ class MainActivity : Activity() {
         val timer=if(sleepAt>0)"${max(1L,(sleepAt-SystemClock.elapsedRealtime())/60000)} min left" else "Off"
         AlertDialog.Builder(this).setTitle("Playback").setItems(arrayOf("Up next · ${upNext.size} queued","Speed · ${playbackSpeed}×","Sleep timer · $timer")){_,i->when(i){
             0->showQueue()
-            1->{val rates=floatArrayOf(.75f,1f,1.25f,1.5f,2f);AlertDialog.Builder(this).setTitle("Playback speed").setSingleChoiceItems(rates.map{"${it}×"}.toTypedArray(),rates.indexOf(playbackSpeed)){d,which->playbackSpeed=rates[which];applySpeed();d.dismiss()}.show()}
+            1->{val rates=floatArrayOf(.75f,1f,1.25f,1.5f,2f);AlertDialog.Builder(this).setTitle("Playback speed").setSingleChoiceItems(rates.map{"${it}×"}.toTypedArray(),rates.indexOfFirst{it==playbackSpeed}){d,which->playbackSpeed=rates[which];applySpeed();d.dismiss()}.show()}
             2->{val minutes=intArrayOf(0,15,30,45,60);AlertDialog.Builder(this).setTitle("Sleep timer").setItems(arrayOf("Off","15 minutes","30 minutes","45 minutes","60 minutes")){_,which->sleepAt=if(minutes[which]==0)0 else SystemClock.elapsedRealtime()+minutes[which]*60000L;Toast.makeText(this,if(sleepAt==0L)"Sleep timer off" else "Music will pause in ${minutes[which]} minutes",Toast.LENGTH_SHORT).show()}.show()}
         }}.show()
     }
@@ -624,6 +628,7 @@ class MainActivity : Activity() {
     private fun trackDetails(song:Song){
         AlertDialog.Builder(this).setTitle(song.title).setMessage("Artist: ${song.artist}\nAlbum: ${song.album}\nDuration: ${if(song.duration>0)time(song.duration.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()) else "Available during playback"}").setPositiveButton("Done",null).show()
     }
+    private fun motionTime()=visualElapsed+if(visualPlaying)SystemClock.uptimeMillis()-visualStart else 0L
     private fun shouldAnimate()=motion&&active&&prepared&&player?.isPlaying==true
     private fun wakeVisuals(){
         if(!::root.isInitialized)return
@@ -691,7 +696,7 @@ class MainActivity : Activity() {
             if(lastTint!=coverTint||lastWidth!=width||waveShader==null){lastTint=coverTint;lastWidth=width;waveShader=LinearGradient(0f,0f,width.toFloat(),0f,intArrayOf(colourMix(coverTint,Color.WHITE,.35f),coverTint,colourMix(blendSecondary,Color.WHITE,.2f)),null,Shader.TileMode.CLAMP)}
             brush.shader=waveShader
             if(waveEnabled&&ratio>0f){
-                val time=if(motion)SystemClock.uptimeMillis()/520f else 0f
+                val time=if(motion)motionTime()/520f else 0f
                 crest.reset();crest.moveTo(inset,centre)
                 val steps=80
                 for(i in 0..steps){val f=i.toFloat()/steps;val x=inset+(end-inset)*f;val envelope=sin(f*Math.PI.toFloat()).pow(1.3f);val wave=sin(f*19f-time)*sin(f*8f+time*.6f);crest.lineTo(x,centre-wave*dp(10)*envelope)}
