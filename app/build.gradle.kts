@@ -8,9 +8,9 @@ android {
     defaultConfig {
         applicationId = "com.crizz.samsungmusic"
         minSdk = 26
-        targetSdk = 32
-        versionCode = 1
-        versionName = "1.0"
+        targetSdk = 34
+        versionCode = 3
+        versionName = "1.2"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
