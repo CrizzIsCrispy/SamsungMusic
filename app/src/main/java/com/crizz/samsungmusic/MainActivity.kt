@@ -62,6 +62,7 @@ class MainActivity : Activity() {
     private var economy = false
     private var playbackSpeed = 1f
     private var tintSong: Long? = null
+    private var displayedSong:Long?=null
     private var tintMotion: ValueAnimator? = null
     private var sleepAt = 0L
     private var lastScan = 0L
@@ -113,7 +114,9 @@ class MainActivity : Activity() {
         intArrayOf(Color.rgb(41, 193, 184), Color.rgb(53, 101, 190)),
         intArrayOf(Color.rgb(239, 159, 77), Color.rgb(198, 82, 130))
     )
-    private val accent get() = palettes[theme][0]
+    private val surfaces=mutableListOf<java.lang.ref.WeakReference<PaletteSurface>>()
+    private var paletteRevision=0
+    private val accent get() = if(adaptive&&selected!=null)colourMix(coverTint,if(light)Color.BLACK else Color.WHITE,.3f)else palettes[theme][0]
     private val inkColor get() = if (light) Color.rgb(29, 27, 34) else Color.rgb(249, 247, 251)
     private val secondary get() = if (light) Color.rgb(111, 104, 118) else Color.rgb(165, 159, 176)
     private fun dp(n: Int) = (resources.displayMetrics.density * n).toInt()
@@ -123,11 +126,7 @@ class MainActivity : Activity() {
         maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
         gravity = Gravity.CENTER_VERTICAL
     }
-    private fun panel(radius: Int = 24, solid: Boolean = false) = GradientDrawable(
-        GradientDrawable.Orientation.TL_BR,
-        if (light) intArrayOf(Color.argb(240,255,255,255), Color.argb(220,244,240,248))
-        else intArrayOf(Color.argb(if(solid) 255 else 155 + glassAmount,37,33,46), Color.argb(if(solid)255 else 130 + glassAmount,23,23,32))
-    ).apply { cornerRadius = dp(radius).toFloat(); setStroke(dp(1), if(light)0x35ffffff else 0x24ffffff) }
+    private fun panel(radius:Int=24,solid:Boolean=false)=PaletteSurface(radius,solid).also{surfaces.add(java.lang.ref.WeakReference(it))}
     private fun row() = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
     private fun column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
     private fun space(n: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(n)) }
@@ -232,7 +231,7 @@ class MainActivity : Activity() {
                 item.setOnClickListener {
                     if(page=="Albums" || page=="Artists") {
                         val group=songs.filter { if(page=="Albums")it.album==song.album else it.artist==song.artist }
-                        AlertDialog.Builder(this@MainActivity).setTitle(title).setItems(group.map{it.title}.toTypedArray()) { _,i -> play(group[i]) }.show()
+                        dialogBuilder().setTitle(title).setItems(group.map{it.title}.toTypedArray()) { _,i -> play(group[i]) }.show()
                     } else play(song)
                 }
                 return item
@@ -289,7 +288,7 @@ class MainActivity : Activity() {
         listOf("Tracks","Albums","Artists","Favourites").forEach { name ->
             tabs.addView(label(name,16,true).apply {
                 setPadding(dp(14),0,dp(14),0); setTextColor(if(page==name)inkColor else secondary)
-                if(page==name) background=GradientDrawable(GradientDrawable.Orientation.TL_BR,intArrayOf(accent, palettes[theme][1])).apply{cornerRadius=dp(22).toFloat();setStroke(dp(1),0x66ffffff)}
+                if(page==name) background=panel(22)
                 setOnClickListener { page=name;drawTabs();filter(); if(motion){library.alpha=0f;library.animate().alpha(1f).setDuration(230).start()} }
             },LinearLayout.LayoutParams(-2,dp(40)))
         }
@@ -310,24 +309,37 @@ class MainActivity : Activity() {
         adapter.notifyDataSetChanged()
     }
     private fun buildPlayer() {
-        sheet=column().apply { setPadding(dp(28),dp(12),dp(28),dp(18)); background=ColorDrawableCompat(); isClickable=true }
-        val close=row(); close.addView(button("⌄","Close player",30){hidePlayer()})
-        close.addView(label("NOW PLAYING",11,true).apply { gravity=Gravity.CENTER;letterSpacing=.16f },LinearLayout.LayoutParams(0,dp(48),1f))
-        close.addView(button("⋯","Player options"){selected?.let{songOptions(it)}?:accessOptions()}); sheet.addView(close)
-        sheet.addView(space(16))
-        bigArt=art(280,22).apply { elevation=dp(16).toFloat() }
+        sheet=column().apply { setPadding(dp(28),dp(8),dp(28),dp(14)); background=ColorDrawableCompat(); isClickable=true }
+        val close=row();close.addView(button("⌄","Close player",30){hidePlayer()})
+        close.addView(View(this),LinearLayout.LayoutParams(0,1,1f))
+        close.addView(button("≡","View queue",24){showQueue()})
+        close.addView(button("☷","Playback options",24){playbackOptions()})
+        close.addView(button("⋯","Player options",27){settingsMenu()});sheet.addView(close)
+        sheet.addView(space(12))
+        bigArt=art(280,26).apply { elevation=dp(8).toFloat() }
         val artArea=FrameLayout(this)
         artArea.addView(bigArt,FrameLayout.LayoutParams(dp(280),dp(280),Gravity.CENTER))
         artArea.addOnLayoutChangeListener{_,l,t,r,b,_,_,_,_->
             val side=min(r-l,b-t)-dp(12)
-            if(side>0 && bigArt.layoutParams.width!=side)bigArt.layoutParams=FrameLayout.LayoutParams(side,side,Gravity.CENTER)
+            if(side>0&&bigArt.layoutParams.width!=side)bigArt.layoutParams=FrameLayout.LayoutParams(side,side,Gravity.CENTER)
         }
-        sheet.addView(artArea,LinearLayout.LayoutParams(-1,0,1f).apply{bottomMargin=dp(16)})
-        val titleRow=row(); val info=column()
-        bigTitle=label("Your next favourite",25,true);bigArtist=label("Choose a song from your library",17).apply{setTextColor(secondary)}
-        info.addView(bigTitle);info.addView(bigArtist)
-        titleRow.addView(info,LinearLayout.LayoutParams(0,-2,1f));love=button("♡","Toggle favourite",30){selected?.let{favourite(it)}}
-        titleRow.addView(love);sheet.addView(titleRow);sheet.addView(space(18))
+        sheet.addView(artArea,LinearLayout.LayoutParams(-1,dp(310)))
+        sheet.addOnLayoutChangeListener{_,l,t,r,b,_,_,_,_->
+            val height=min(r-l-dp(12),((b-t)*.44f).toInt()).coerceAtLeast(dp(140))
+            if(artArea.layoutParams.height!=height)artArea.layoutParams=LinearLayout.LayoutParams(-1,height)
+        }
+        sheet.addView(space(14))
+        bigTitle=label("Choose a song",24,true).apply{gravity=Gravity.CENTER}
+        bigArtist=label("From your library",15).apply{setTextColor(secondary);gravity=Gravity.CENTER}
+        sheet.addView(bigTitle,LinearLayout.LayoutParams(-1,dp(34)))
+        sheet.addView(bigArtist,LinearLayout.LayoutParams(-1,dp(26)))
+        sheet.addView(View(this),LinearLayout.LayoutParams(1,0,1f))
+        val actions=row()
+        actions.addView(button("≡","View queue",26){showQueue()},LinearLayout.LayoutParams(0,dp(48),1f))
+        love=button("♡","Toggle favourite",30){selected?.let{favourite(it)}}
+        actions.addView(love,LinearLayout.LayoutParams(0,dp(48),1f))
+        actions.addView(button("＋","Add current song to play next",30){selected?.let{upNext.addLast(it);Toast.makeText(this,"Added to queue",Toast.LENGTH_SHORT).show()}},LinearLayout.LayoutParams(0,dp(48),1f))
+        sheet.addView(actions)
         seek=SeekBar(this).apply {
             progressTintList=ColorStateList.valueOf(accent);thumbTintList=ColorStateList.valueOf(inkColor)
             setPadding(0,0,0,0)
@@ -341,12 +353,13 @@ class MainActivity : Activity() {
         val times=row();elapsed=label("0:00",11).apply{setTextColor(secondary)};remaining=label("−0:00",11).apply{setTextColor(secondary);gravity=Gravity.RIGHT}
         times.addView(elapsed,LinearLayout.LayoutParams(0,dp(24),1f));times.addView(remaining);sheet.addView(times)
         val controls=row().apply{gravity=Gravity.CENTER}
-        random=button("⤨","Toggle shuffle",25){shuffle=!shuffle;updatePlayer()};controls.addView(random)
-        controls.addView(button("│◂","Previous song",29){next(-1)})
-        bigPlay=button("▶","Play or pause",42){toggle()};controls.addView(bigPlay,LinearLayout.LayoutParams(0,dp(88),1f))
-        controls.addView(button("▸│","Next song",29){next(1)})
-        looping=button("↻","Toggle repeat",28){repeat=!repeat;updatePlayer()};controls.addView(looping);sheet.addView(controls)
-        sheet.addView(label("QUEUE   ·   PLAYBACK OPTIONS",10,true).apply{setOnClickListener{playbackOptions()}}.apply{setTextColor(secondary);gravity=Gravity.CENTER;letterSpacing=.12f},LinearLayout.LayoutParams(-1,dp(30)))
+        random=button("⤨","Toggle shuffle",24){shuffle=!shuffle;updatePlayer()}
+        bigPlay=button("▶","Play or pause",38){toggle()}
+        looping=button("↻","Toggle repeat",26){repeat=!repeat;updatePlayer()}
+        listOf(random,button("│◂","Previous song",29){next(-1)},bigPlay,button("▸│","Next song",29){next(1)},looping).forEach{
+            it.tag="flat";controls.addView(it,LinearLayout.LayoutParams(0,dp(74),1f))
+        }
+        sheet.addView(controls)
         playerHost=FrameLayout(this).apply{visibility=View.GONE;isClickable=true}
         playerHost.addView(Atmosphere(true),FrameLayout.LayoutParams(-1,-1))
         playerHost.addView(sheet,FrameLayout.LayoutParams(-1,-1))
@@ -370,7 +383,7 @@ class MainActivity : Activity() {
         val key=song.id.toString();if(!favourites.add(key))favourites.remove(key)
         prefs.edit().putStringSet("favourites",favourites.toSet()).apply();filter();updatePlayer()
     }
-    private fun songOptions(song:Song){AlertDialog.Builder(this).setTitle(song.title).setItems(arrayOf("Play now",if(song.id.toString() in favourites)"Remove favourite" else "Add to favourites","Show player","Play next","Track details")){_,i->when(i){0->play(song);1->favourite(song);2->showPlayer();3->{upNext.addFirst(song);Toast.makeText(this,"Added to play next",Toast.LENGTH_SHORT).show()};4->trackDetails(song)}}.show()}
+    private fun songOptions(song:Song){dialogBuilder().setTitle(song.title).setItems(arrayOf("Play now",if(song.id.toString() in favourites)"Remove favourite" else "Add to favourites","Show player","Play next","Track details")){_,i->when(i){0->play(song);1->favourite(song);2->showPlayer();3->{upNext.addFirst(song);Toast.makeText(this,"Added to play next",Toast.LENGTH_SHORT).show()};4->trackDetails(song)}}.show()}
     private fun customise(){
         val box=column().apply{setPadding(dp(24),dp(8),dp(24),dp(12))}
         box.addView(label("Make it yours",25,true));box.addView(space(16));box.addView(label("Colour atmosphere",14))
@@ -393,16 +406,16 @@ class MainActivity : Activity() {
             })})
         box.addView(label("Themes and favourites are saved on your phone.",12).apply{maxLines=2;setTextColor(secondary)})
         val scrollBox=ScrollView(this).apply{addView(box)}
-        dialog=AlertDialog.Builder(this).setView(scrollBox).setPositiveButton("Done"){_,_->rebuild()}.create()
+        dialog=dialogBuilder().setView(scrollBox).setPositiveButton("Done"){_,_->rebuild()}.create()
         dialog?.show();dialog?.window?.setBackgroundDrawable(panel(28,true))
     }
     private var dialog:AlertDialog?=null
     private fun saveAppearance(){prefs.edit().putInt("theme",theme).putBoolean("light",light).putBoolean("motion",motion).putInt("glass",glassAmount).putBoolean("adaptive",adaptive).putBoolean("economy",economy).putBoolean("wave",waveEnabled).putBoolean("artistSort",sortByArtist).apply()}
-    private fun rebuild(){expanded=false;tintSong=null;buildUI()}
+    private fun rebuild(){expanded=false;tintSong=null;if(selected==null||!adaptive){coverTint=palettes[theme][0];blendSecondary=palettes[theme][1]};paletteRevision++;buildUI()}
     private fun audioPermission()=if(Build.VERSION.SDK_INT>=33)Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
     private fun songUri(song:Song)=if(song.source.isNotEmpty())Uri.parse(song.source)else ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,song.id)
     private fun accessOptions(){
-        AlertDialog.Builder(this).setTitle("Find your music").setMessage("Scan audio indexed by Android, or choose files directly. Audio in private app folders or cloud storage may need to be selected from Files.")
+        dialogBuilder().setTitle("Find your music").setMessage("Scan audio indexed by Android, or choose files directly. Audio in private app folders or cloud storage may need to be selected from Files.")
             .setPositiveButton("Choose audio"){_,_->pickAudio()}
             .setNeutralButton("Rescan"){_,_->if(checkSelfPermission(audioPermission())==PackageManager.PERMISSION_GRANTED)loadSongs()else requestPermissions(arrayOf(audioPermission()),42)}
             .setNegativeButton("App settings"){_,_->startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:$packageName")))}.show()
@@ -465,6 +478,10 @@ class MainActivity : Activity() {
     private fun updatePlayer(){
         val song=selected;val playing=prepared&&player?.isPlaying==true
         if(visualPlaying!=playing){if(visualPlaying)visualElapsed+=SystemClock.uptimeMillis()-visualStart;visualPlaying=playing;visualStart=SystemClock.uptimeMillis()}
+        if(song!=null&&displayedSong!=song.id){
+            displayedSong=song.id
+            if(motion){bigArt.animate().cancel();bigArt.alpha=.4f;bigArt.scaleX=.97f;bigArt.scaleY=.97f;bigArt.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(450).setInterpolator(DecelerateInterpolator()).start();bigTitle.alpha=.3f;bigTitle.animate().alpha(1f).setDuration(400).start()}
+        }
         miniTitle.text=song?.title?:"Choose your first song";miniArtist.text=song?.artist?:"On your device"
         bigTitle.text=song?.title?:"Your next favourite";bigArtist.text=song?.artist?:"Choose a song from your library"
         miniPlay.text=if(playing)"Ⅱ"else"▶";bigPlay.text=miniPlay.text
@@ -500,49 +517,34 @@ class MainActivity : Activity() {
                 options.inSampleSize=max(1,max(options.outWidth,options.outHeight)/700);options.inJustDecodeBounds=false
                 bitmap=BitmapFactory.decodeByteArray(bytes,0,bytes.size,options)
             }}catch(_:Exception){}finally{try{retriever.release()}catch(_:Exception){}}
-            ui.post{loading.remove(song.id);if(bitmap==null)noArtwork.add(song.id);bitmap?.let{b->covers.put(song.id,b);if(!isDestroyed){if(view.tag==song.id)view.setImageBitmap(b);if(selected?.id==song.id){miniArt.setImageBitmap(b);bigArt.setImageBitmap(b);tintSong=null;sampleTint(b);cardSurface.artwork=b;cardSurface.invalidateSelf()};refreshVisibleArtwork(song.id,b)}}}
+            ui.post{loading.remove(song.id);if(bitmap==null){noArtwork.add(song.id);if(!isDestroyed&&selected?.id==song.id){tintSong=null;sampleTint(placeholder())}};bitmap?.let{b->covers.put(song.id,b);if(!isDestroyed){if(view.tag==song.id)view.setImageBitmap(b);if(selected?.id==song.id){miniArt.setImageBitmap(b);bigArt.setImageBitmap(b);tintSong=null;sampleTint(b);cardSurface.artwork=b;cardSurface.invalidateSelf()};refreshVisibleArtwork(song.id,b)}}}
         }
     }
     private inner class Atmosphere(private val immersive:Boolean=false):View(this@MainActivity){
         private val paint=Paint(Paint.ANTI_ALIAS_FLAG)
-        private var start=SystemClock.uptimeMillis()
-        private val path=Path()
-        private val ribbonColours=IntArray(3)
-        private var lastFrame=0L
-        private var gradient:Shader?=null
-        private var lastW=0
-        private var lastTheme=-1
-        private var lastTint=0
-        private var lastH=0
-        private var ribbonShader:Shader?=null
-        private var shaderColour=0
-        private var shaderWidth=0
-        private var shaderHeight=0
+        private val shaders=arrayOfNulls<Shader>(3)
+        private val matrix=Matrix()
+        private var revision=-1
         override fun onDraw(c:Canvas){
-            val w=width.toFloat();val h=height.toFloat();val t=if(motion)motionTime()/8000f else 0f
-            c.drawColor(if(light)Color.rgb(241,242,252)else Color.rgb(9,11,24))
-            if(lastW!=width||lastTheme!=theme||lastH!=height||lastTint!=coverTint){
-                lastW=width;lastTheme=theme;lastH=height;lastTint=coverTint
-                gradient=RadialGradient(w*.5f,h*.3f,w,Color.argb(if(light)45 else 95,100,95,210),Color.TRANSPARENT,Shader.TileMode.CLAMP)
+            val w=width.toFloat();val h=height.toFloat();if(w<=0f||h<=0f)return
+            val base=if(light)colourMix(coverTint,Color.WHITE,.94f)else colourMix(coverTint,Color.BLACK,.96f)
+            c.drawColor(base)
+            if(revision!=paletteRevision){
+                revision=paletteRevision
+                val hues=intArrayOf(coverTint,blendSecondary,colourMix(coverTint,blendSecondary,.5f))
+                for(i in 0..2){val col=hues[i];shaders[i]=RadialGradient(0f,0f,1f,Color.argb(if(light)70 else if(immersive)165 else 115,Color.red(col),Color.green(col),Color.blue(col)),Color.TRANSPARENT,Shader.TileMode.CLAMP)}
             }
-                // The palette is rebuilt only when size or colour changes.
-            paint.shader=gradient;c.drawRect(0f,0f,w,h,paint)
-            ribbonColours[0]=Color.argb(if(immersive)150 else 60,83,141,255)
-            ribbonColours[1]=Color.argb(if(immersive)135 else 50,Color.red(coverTint),Color.green(coverTint),Color.blue(coverTint))
-            ribbonColours[2]=Color.argb(if(immersive)120 else 40,191,70,244)
-            if(ribbonShader==null||shaderColour!=coverTint||shaderWidth!=width||shaderHeight!=height){ribbonShader=LinearGradient(0f,h*.2f,w,h*.8f,ribbonColours,null,Shader.TileMode.CLAMP);shaderColour=coverTint;shaderWidth=width;shaderHeight=height}
-            paint.shader=ribbonShader
-            val centre=if(immersive)h*.38f else h*.68f
-            for(i in 0..4){
-                val off=i*0.4f;val sway=sin(t+off)*h*.09f
-                path.reset();path.moveTo(-w*.2f,centre+sway+dp(i*7))
-                path.cubicTo(w*.15f,centre-h*.3f+cos(t+off)*h*.09f,w*.55f,centre+h*.32f,w*1.2f,centre-h*.12f+sway)
-                path.cubicTo(w*.6f,centre+h*.5f+sin(t*.8f)*h*.08f,w*.2f,centre-h*.14f,w*-.2f,centre+sway+dp(i*7))
-                path.close();paint.style=Paint.Style.FILL;paint.alpha=if(i==0)120 else 35;c.drawPath(path,paint)
-                paint.style=Paint.Style.STROKE;paint.strokeWidth=dp(1).toFloat();paint.alpha=if(immersive)140 else 60;c.drawPath(path,paint)
+            val t=if(motion)SystemClock.uptimeMillis()/16000f else 0f
+            for(i in 0..2){
+                val phase=t+i*2.1f
+                val x=w*(.5f+sin(phase)*.4f)
+                val y=h*((if(immersive).75f else .55f)+cos(phase*.74f)*.19f)
+                val radius=w*(1.05f+sin(phase*.61f)*.18f)
+                matrix.setScale(radius,radius*1.25f);matrix.postTranslate(x,y)
+                shaders[i]?.setLocalMatrix(matrix);paint.shader=shaders[i];c.drawRect(0f,0f,w,h,paint)
             }
-            paint.alpha=255;paint.shader=null;paint.style=Paint.Style.FILL
-            if(shouldAnimate()&&(immersive||!expanded)&&isShown&&windowVisibility==View.VISIBLE){lastFrame=SystemClock.uptimeMillis();if(economy)postInvalidateDelayed(33)else postInvalidateOnAnimation()}
+            paint.shader=null
+            if(motion&&active&&isShown&&windowVisibility==View.VISIBLE&&(immersive||!expanded)){if(economy)postInvalidateDelayed(33)else postInvalidateOnAnimation()}
         }
     }
     private fun ColorDrawableCompat()=android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
@@ -558,8 +560,47 @@ class MainActivity : Activity() {
             small.recycle()
         }catch(_:Exception){}
         blendSecondary=second;tintMotion?.cancel();val from=coverTint
-        if(motion&&active)tintMotion=ValueAnimator.ofArgb(from,target).apply{duration=850;addUpdateListener{coverTint=it.animatedValue as Int;cardSurface.invalidateSelf();wakeVisuals()};start()}
-        else{coverTint=target;cardSurface.invalidateSelf();wakeVisuals()}
+        if(motion&&active)tintMotion=ValueAnimator.ofArgb(from,target).apply{duration=850;addUpdateListener{coverTint=it.animatedValue as Int;refreshPalette();wakeVisuals()};start()}
+        else{coverTint=target;refreshPalette();wakeVisuals()}
+    }
+    private fun refreshPalette(){
+        paletteRevision++
+        val iterator=surfaces.iterator()
+        while(iterator.hasNext()){val surface=iterator.next().get();if(surface==null)iterator.remove()else surface.invalidateSelf()}
+        if(::cardSurface.isInitialized)cardSurface.invalidateSelf()
+        window.statusBarColor=if(light)colourMix(coverTint,Color.WHITE,.94f)else colourMix(coverTint,Color.BLACK,.96f)
+        window.navigationBarColor=window.statusBarColor
+    }
+    private fun dialogBuilder():AlertDialog.Builder=object:AlertDialog.Builder(android.view.ContextThemeWrapper(this@MainActivity,if(light)android.R.style.Theme_Material_Light_Dialog_Alert else android.R.style.Theme_Material_Dialog_Alert)){
+        override fun show():AlertDialog{
+            val dialog=super.show();dialog.window?.setBackgroundDrawable(panel(28,true))
+            listOf(AlertDialog.BUTTON_POSITIVE,AlertDialog.BUTTON_NEGATIVE,AlertDialog.BUTTON_NEUTRAL).forEach{dialog.getButton(it)?.setTextColor(accent)}
+            return dialog
+        }
+    }
+    private inner class PaletteSurface(private val radius:Int,private val solid:Boolean):Drawable(){
+        private val paint=Paint(Paint.ANTI_ALIAS_FLAG)
+        private val rect=RectF()
+        private var shader:Shader?=null
+        private var revision=-1
+        override fun onBoundsChange(bounds:Rect){rect.set(bounds);revision=-1}
+        override fun getOutline(outline:Outline){outline.setRoundRect(bounds,dp(radius).toFloat())}
+        override fun draw(c:Canvas){
+            if(rect.isEmpty)return
+            if(revision!=paletteRevision){
+                revision=paletteRevision
+                val first=if(light)colourMix(coverTint,Color.WHITE,.9f)else colourMix(coverTint,Color.BLACK,.76f)
+                val last=if(light)colourMix(blendSecondary,Color.WHITE,.95f)else colourMix(blendSecondary,Color.BLACK,.9f)
+                shader=LinearGradient(0f,0f,rect.width(),rect.height(),first,last,Shader.TileMode.CLAMP)
+            }
+            paint.shader=shader;paint.alpha=if(solid)255 else 145+glassAmount
+            c.drawRoundRect(rect,dp(radius).toFloat(),dp(radius).toFloat(),paint)
+            paint.shader=null;paint.alpha=255;paint.color=if(light)0x55ffffff else 0x28ffffff;paint.style=Paint.Style.STROKE;paint.strokeWidth=dp(1).toFloat()
+            c.drawRoundRect(rect,dp(radius).toFloat(),dp(radius).toFloat(),paint);paint.style=Paint.Style.FILL
+        }
+        override fun setAlpha(alpha:Int){}
+        override fun setColorFilter(filter:ColorFilter?){}
+        @Deprecated("Drawable opacity")override fun getOpacity()=PixelFormat.TRANSLUCENT
     }
     private inner class Control:TextView(this@MainActivity){
         private val brush=Paint(Paint.ANTI_ALIAS_FLAG)
@@ -572,11 +613,11 @@ class MainActivity : Activity() {
             val mark=text.toString();val transport=mark=="▶"||mark=="Ⅱ"||mark.contains("│")
             if(!transport){super.onDraw(c);return}
             val cx=width*.5f;val cy=height*.5f
-            val main=height>=dp(80);val radius=if(main)dp(35).toFloat()else dp(21).toFloat()
+            val main=height>=dp(70);val radius=if(main)dp(35).toFloat()else dp(21).toFloat()
             if(controlShader==null||cachedTint!=coverTint||cachedWidth!=width||cachedHeight!=height){cachedTint=coverTint;cachedWidth=width;cachedHeight=height;controlShader=RadialGradient(cx-radius*.35f,cy-radius*.5f,radius*1.8f,intArrayOf(colourMix(coverTint,Color.WHITE,.4f),colourMix(coverTint,Color.BLACK,.25f),colourMix(coverTint,Color.BLACK,.65f)),null,Shader.TileMode.CLAMP)}
             brush.shader=controlShader
-            brush.style=Paint.Style.FILL;c.drawCircle(cx,cy,radius,brush)
-            brush.shader=null;brush.style=Paint.Style.STROKE;brush.strokeWidth=dp(1).toFloat();brush.color=Color.argb(130,205,208,255);c.drawCircle(cx,cy,radius,brush)
+            brush.style=Paint.Style.FILL;if(tag!="flat")c.drawCircle(cx,cy,radius,brush)
+            brush.shader=null;brush.style=Paint.Style.STROKE;brush.strokeWidth=dp(1).toFloat();brush.color=Color.argb(130,205,208,255);if(tag!="flat")c.drawCircle(cx,cy,radius,brush)
             brush.style=Paint.Style.FILL;brush.color=Color.WHITE
             val unit=if(main)dp(12).toFloat()else dp(7).toFloat()
             if(mark=="Ⅱ"){
@@ -592,7 +633,7 @@ class MainActivity : Activity() {
 
     private fun settingsMenu(){
         val choices=arrayOf("Appearance & motion","Playback options","Library access & rescan","Sort: ${if(sortByArtist)"Artist" else "Title"}","About")
-        AlertDialog.Builder(this).setTitle("Settings").setItems(choices){_,i->when(i){
+        dialogBuilder().setTitle("Settings").setItems(choices){_,i->when(i){
             0->customise();1->playbackOptions();2->accessOptions();3->{sortByArtist=!sortByArtist;saveAppearance();filter();settingsMenu()};4->about()
         }}.show()
     }
@@ -605,15 +646,15 @@ class MainActivity : Activity() {
         content.addView(label("Design by Crizz",22,true).apply{setTextColor(accent)})
         content.addView(space(14))
         content.addView(label("An independent music player with adaptive colour, ambient motion and a familiar Galaxy-inspired library.\n\nThe animated wave is a decorative playback effect.\n\nNot affiliated with Samsung or Apple.",14).apply{maxLines=10;setTextColor(secondary)})
-        val info=AlertDialog.Builder(this).setView(content).setPositiveButton("Done",null).create()
+        val info=dialogBuilder().setView(content).setPositiveButton("Done",null).create()
         info.show();info.window?.setBackgroundDrawable(panel(28,true))
     }
     private fun playbackOptions(){
         val timer=if(sleepAt>0)"${max(1L,(sleepAt-SystemClock.elapsedRealtime())/60000)} min left" else "Off"
-        AlertDialog.Builder(this).setTitle("Playback").setItems(arrayOf("Up next · ${upNext.size} queued","Speed · ${playbackSpeed}×","Sleep timer · $timer")){_,i->when(i){
+        dialogBuilder().setTitle("Playback").setItems(arrayOf("Up next · ${upNext.size} queued","Speed · ${playbackSpeed}×","Sleep timer · $timer")){_,i->when(i){
             0->showQueue()
-            1->{val rates=floatArrayOf(.75f,1f,1.25f,1.5f,2f);AlertDialog.Builder(this).setTitle("Playback speed").setSingleChoiceItems(rates.map{"${it}×"}.toTypedArray(),rates.indexOfFirst{it==playbackSpeed}){d,which->playbackSpeed=rates[which];applySpeed();d.dismiss()}.show()}
-            2->{val minutes=intArrayOf(0,15,30,45,60);AlertDialog.Builder(this).setTitle("Sleep timer").setItems(arrayOf("Off","15 minutes","30 minutes","45 minutes","60 minutes")){_,which->sleepAt=if(minutes[which]==0)0 else SystemClock.elapsedRealtime()+minutes[which]*60000L;Toast.makeText(this,if(sleepAt==0L)"Sleep timer off" else "Music will pause in ${minutes[which]} minutes",Toast.LENGTH_SHORT).show()}.show()}
+            1->{val rates=floatArrayOf(.75f,1f,1.25f,1.5f,2f);dialogBuilder().setTitle("Playback speed").setSingleChoiceItems(rates.map{"${it}×"}.toTypedArray(),rates.indexOfFirst{it==playbackSpeed}){d,which->playbackSpeed=rates[which];applySpeed();d.dismiss()}.show()}
+            2->{val minutes=intArrayOf(0,15,30,45,60);dialogBuilder().setTitle("Sleep timer").setItems(arrayOf("Off","15 minutes","30 minutes","45 minutes","60 minutes")){_,which->sleepAt=if(minutes[which]==0)0 else SystemClock.elapsedRealtime()+minutes[which]*60000L;Toast.makeText(this,if(sleepAt==0L)"Sleep timer off" else "Music will pause in ${minutes[which]} minutes",Toast.LENGTH_SHORT).show()}.show()}
         }}.show()
     }
     private fun applySpeed(){
@@ -622,11 +663,11 @@ class MainActivity : Activity() {
     }
     private fun showQueue(){
         val queued=upNext.toList()
-        if(queued.isEmpty()){AlertDialog.Builder(this).setTitle("Up next").setMessage("Your library continues automatically. Use a song’s ⋯ menu and choose Play next to queue it.").setPositiveButton("Done",null).show();return}
-        AlertDialog.Builder(this).setTitle("Up next").setItems(queued.map{it.title}.toTypedArray()){_,i->kotlin.repeat(i+1){upNext.removeFirst()};play(queued[i])}.setNeutralButton("Clear queue"){_,_->upNext.clear()}.setPositiveButton("Done",null).show()
+        if(queued.isEmpty()){dialogBuilder().setTitle("Up next").setMessage("Your library continues automatically. Use a song’s ⋯ menu and choose Play next to queue it.").setPositiveButton("Done",null).show();return}
+        dialogBuilder().setTitle("Up next").setItems(queued.map{it.title}.toTypedArray()){_,i->kotlin.repeat(i+1){upNext.removeFirst()};play(queued[i])}.setNeutralButton("Clear queue"){_,_->upNext.clear()}.setPositiveButton("Done",null).show()
     }
     private fun trackDetails(song:Song){
-        AlertDialog.Builder(this).setTitle(song.title).setMessage("Artist: ${song.artist}\nAlbum: ${song.album}\nDuration: ${if(song.duration>0)time(song.duration.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()) else "Available during playback"}").setPositiveButton("Done",null).show()
+        dialogBuilder().setTitle(song.title).setMessage("Artist: ${song.artist}\nAlbum: ${song.album}\nDuration: ${if(song.duration>0)time(song.duration.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()) else "Available during playback"}").setPositiveButton("Done",null).show()
     }
     private fun motionTime()=visualElapsed+if(visualPlaying)SystemClock.uptimeMillis()-visualStart else 0L
     private fun shouldAnimate()=motion&&active&&prepared&&player?.isPlaying==true
